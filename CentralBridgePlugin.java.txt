@@ -2,13 +2,17 @@ package br.com.sobrevivencia.central;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.BatteryManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.provider.Settings;
 
 import androidx.activity.result.ActivityResult;
 
@@ -26,6 +30,7 @@ import com.getcapacitor.annotation.PermissionCallback;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 
 @CapacitorPlugin(
@@ -38,6 +43,11 @@ import java.util.Set;
 public class CentralBridgePlugin extends Plugin {
     private static final String PREFS = "central_native";
     private static final String FOLDERS = "folders";
+    private static final String PROBE_ACTIVE = "probe_active";
+    private static final String PROBE_TARGET = "probe_target";
+    private static final String PROBE_STATE = "probe_state";
+    private static final String PROBE_SEEN = "probe_seen";
+    private static final String PROBE_TIME = "probe_time";
 
     private JSObject locationPermissionResult() {
         PermissionState precise = getPermissionState("location");
@@ -122,6 +132,178 @@ public class CentralBridgePlugin extends Plugin {
         else { JSObject r=new JSObject();r.put("opened",false);call.resolve(r);return; }
         try { intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); getContext().startActivity(intent); JSObject r=new JSObject();r.put("opened",true);call.resolve(r); }
         catch(Exception e){ JSObject r=new JSObject();r.put("opened",false);call.resolve(r); }
+    }
+
+    private boolean accessibilityServiceEnabled() {
+        try {
+            String enabled = Settings.Secure.getString(
+                getContext().getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            );
+            if (enabled == null || enabled.isEmpty()) return false;
+
+            ComponentName expected = new ComponentName(getContext(), CentralAccessibilityService.class);
+            String[] parts = enabled.split(":");
+            for (String part : parts) {
+                ComponentName current = ComponentName.unflattenFromString(part);
+                if (current != null && current.equals(expected)) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private void returnToCentral() {
+        try {
+            Intent launch = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                getContext().startActivity(launch);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    @PluginMethod
+    public void isAccessibilityEnabled(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("enabled", accessibilityServiceEnabled());
+        ret.put("connected", CentralAccessibilityService.isConnected());
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openAccessibilitySettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            JSObject ret = new JSObject();
+            ret.put("opened", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            JSObject ret = new JSObject();
+            ret.put("opened", false);
+            call.resolve(ret);
+        }
+    }
+
+    @PluginMethod
+    public void disableAccessibilityService(PluginCall call) {
+        boolean disabled = CentralAccessibilityService.disableServiceIfConnected();
+        JSObject ret = new JSObject();
+        ret.put("disabled", disabled);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void canOpenSystemAction(PluginCall call) {
+        String action = call.getString("action", "");
+        Intent intent = null;
+        if ("camera".equals(action)) intent = new Intent("android.media.action.IMAGE_CAPTURE");
+        else if ("recorder".equals(action)) intent = new Intent("android.provider.MediaStore.RECORD_SOUND");
+
+        boolean available = false;
+        try {
+            available = intent != null && intent.resolveActivity(getContext().getPackageManager()) != null;
+        } catch (Exception ignored) {}
+
+        JSObject ret = new JSObject();
+        ret.put("available", available);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void startAppProbe(PluginCall call) {
+        String packageName = call.getString("packageName", "").trim();
+        String label = call.getString("label", packageName);
+
+        JSObject ret = new JSObject();
+        if (packageName.isEmpty()) {
+            ret.put("started", false);
+            ret.put("reason", "package_missing");
+            call.resolve(ret);
+            return;
+        }
+
+        if (!accessibilityServiceEnabled()) {
+            ret.put("started", false);
+            ret.put("reason", "accessibility_disabled");
+            call.resolve(ret);
+            return;
+        }
+
+        Intent launch = null;
+        try {
+            launch = getContext().getPackageManager().getLaunchIntentForPackage(packageName);
+        } catch (Exception ignored) {}
+
+        if (launch == null) {
+            ret.put("started", false);
+            ret.put("reason", "not_installed");
+            call.resolve(ret);
+            return;
+        }
+
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs.edit()
+            .putBoolean(PROBE_ACTIVE, true)
+            .putString(PROBE_TARGET, packageName)
+            .putString(PROBE_STATE, "pending")
+            .putString(PROBE_SEEN, "")
+            .putString("probe_label", label)
+            .putLong(PROBE_TIME, System.currentTimeMillis())
+            .apply();
+
+        try {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(launch);
+
+            ret.put("started", true);
+            ret.put("packageName", packageName);
+            call.resolve(ret);
+
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                SharedPreferences current = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                if (current.getBoolean(PROBE_ACTIVE, false)
+                    && packageName.equals(current.getString(PROBE_TARGET, ""))
+                    && "pending".equals(current.getString(PROBE_STATE, ""))) {
+                    current.edit()
+                        .putString(PROBE_STATE, "timeout")
+                        .putLong(PROBE_TIME, System.currentTimeMillis())
+                        .apply();
+                    returnToCentral();
+                }
+            }, 6000);
+        } catch (Exception e) {
+            prefs.edit()
+                .putString(PROBE_STATE, "launch_failed")
+                .putBoolean(PROBE_ACTIVE, false)
+                .apply();
+            ret.put("started", false);
+            ret.put("reason", "launch_failed");
+            call.resolve(ret);
+        }
+    }
+
+    @PluginMethod
+    public void getAppProbeResult(PluginCall call) {
+        String requestedPackage = call.getString("packageName", "");
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String target = prefs.getString(PROBE_TARGET, "");
+        String state = prefs.getString(PROBE_STATE, "idle");
+
+        JSObject ret = new JSObject();
+        ret.put("state", state);
+        ret.put("targetPackage", target);
+        ret.put("seenPackage", prefs.getString(PROBE_SEEN, ""));
+        ret.put("timestamp", prefs.getLong(PROBE_TIME, 0));
+
+        if (!requestedPackage.isEmpty() && !requestedPackage.equals(target)) {
+            ret.put("state", "different_probe");
+        } else if ("verified".equals(state) || "timeout".equals(state) || "launch_failed".equals(state)) {
+            prefs.edit().putBoolean(PROBE_ACTIVE, false).apply();
+        }
+
+        call.resolve(ret);
     }
 
     @PluginMethod

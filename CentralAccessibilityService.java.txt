@@ -1,0 +1,107 @@
+package br.com.sobrevivencia.central;
+
+import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.accessibility.AccessibilityEvent;
+
+import java.lang.ref.WeakReference;
+
+public class CentralAccessibilityService extends AccessibilityService {
+    private static final String PREFS = "central_native";
+    private static final String PROBE_ACTIVE = "probe_active";
+    private static final String PROBE_TARGET = "probe_target";
+    private static final String PROBE_STATE = "probe_state";
+    private static final String PROBE_SEEN = "probe_seen";
+    private static final String PROBE_TIME = "probe_time";
+    private static WeakReference<CentralAccessibilityService> instance = new WeakReference<>(null);
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        instance = new WeakReference<>(this);
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("accessibility_connected", true)
+            .apply();
+    }
+
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event == null || event.getPackageName() == null) return;
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (!prefs.getBoolean(PROBE_ACTIVE, false)) return;
+        if (!"pending".equals(prefs.getString(PROBE_STATE, ""))) return;
+
+        String target = prefs.getString(PROBE_TARGET, "");
+        String seen = String.valueOf(event.getPackageName());
+
+        if (!target.isEmpty() && target.equals(seen)) {
+            prefs.edit()
+                .putString(PROBE_STATE, "verified")
+                .putString(PROBE_SEEN, seen)
+                .putLong(PROBE_TIME, System.currentTimeMillis())
+                .apply();
+
+            handler.postDelayed(this::returnToCentral, 900);
+        }
+    }
+
+    private void returnToCentral() {
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+            if (launch != null) {
+                launch.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK |
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                );
+                startActivity(launch);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean isConnected() {
+        return instance.get() != null;
+    }
+
+    public static boolean disableServiceIfConnected() {
+        CentralAccessibilityService service = instance.get();
+        if (service == null) return false;
+        try {
+            service.disableSelf();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void onInterrupt() {}
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        markDisconnected();
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onDestroy() {
+        markDisconnected();
+        instance.clear();
+        super.onDestroy();
+    }
+
+    private void markDisconnected() {
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("accessibility_connected", false)
+            .apply();
+    }
+}

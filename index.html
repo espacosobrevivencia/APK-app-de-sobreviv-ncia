@@ -109,6 +109,30 @@ body.text-large{font-size:19px}body.text-large .page-header p,body.text-large .p
 @media(min-width:700px){.central-resource-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.scenario-grid,.quick-card-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:360px){.central-resource-grid,.scenario-grid,.quick-card-grid,.central-dashboard{grid-template-columns:1fr}.central-mini-grid{grid-template-columns:1fr}}
 
+
+/* V4.1 — Diagnóstico Automático do Segundo Espaço */
+.diagnostic-hero{padding:14px;border:1px solid #28533e;border-radius:17px;background:#020805;margin-bottom:10px}
+.diagnostic-hero strong,.diagnostic-hero small{display:block}
+.diagnostic-hero small{margin-top:5px;color:var(--muted);line-height:1.4}
+.diagnostic-status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}
+.diagnostic-status-card{padding:10px;border:1px solid var(--line);border-radius:13px;background:#030303}
+.diagnostic-status-card strong,.diagnostic-status-card small{display:block}
+.diagnostic-status-card strong{font-size:12px}
+.diagnostic-status-card small{margin-top:4px;color:var(--muted);font-size:10px}
+.diagnostic-list{display:flex;flex-direction:column;gap:7px}
+.diagnostic-row{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:9px;align-items:center;padding:11px;border:1px solid var(--line);border-radius:14px;background:#040404}
+.diagnostic-row .diag-icon{font-size:22px;text-align:center}
+.diagnostic-row strong,.diagnostic-row small{display:block}
+.diagnostic-row small{color:var(--muted);font-size:10px;margin-top:3px;line-height:1.35}
+.diag-state{min-width:78px;text-align:center;padding:5px 7px;border:1px solid var(--line);border-radius:999px;color:#aaa;font-size:9px;font-weight:900}
+.diag-state.ok{border-color:#24563a;color:var(--accent);background:#031008}
+.diag-state.review{border-color:#5a4b22;color:var(--warning);background:#0b0902}
+.diag-state.fail{border-color:#5a2222;color:var(--danger);background:#0b0303}
+.diag-state.running{border-color:#315a7a;color:#9bd2ff;background:#02070b}
+.diagnostic-progress{height:10px;border-radius:999px;overflow:hidden;border:1px solid var(--line);background:#000;margin:10px 0}
+.diagnostic-progress>span{display:block;height:100%;width:0;background:var(--accent);transition:width .2s ease}
+.diagnostic-live{margin-top:8px;color:var(--muted);font-size:11px}
+
 </style>
 </head>
 <body>
@@ -149,7 +173,7 @@ body.text-large{font-size:19px}body.text-large .page-header p,body.text-large .p
   <script>
 "use strict";
 
-const APP_VERSION="4.0.2";
+const APP_VERSION="4.1.0";
 const CURRENT_SCHEMA = 8;
 const EXPECTED_CACHE = "sobrevivencia-central-v4.0.0";
 const CORE_FILES = ["./index.html","./manifest.json","./icone.png"];
@@ -319,6 +343,7 @@ const QUICK_CARD_DEFAULTS = [
 const MODULES = [
   ["central","🛡️","Central do Segundo Espaço","Apps, recursos e redundâncias em um único painel."],
   ["prontidao","🧪","Prontidão","Teste periódico do segundo espaço e equipamentos."],
+  ["diagnostico","🔍","Diagnóstico automático","Abre e confirma automaticamente os apps configurados usando Acessibilidade."],
   ["cenarios","🚨","Cenários integrados","Sequências rápidas que conectam protocolos, ferramentas e apps."],
   ["cartoes","🖼️","Cartões rápidos","Atalhos para imagens de consulta imediata na Biblioteca."],
   ["protocolos-pessoais","📋","Protocolos pessoais","Se acontecer… / primeiros minutos / planos próprios."],
@@ -359,7 +384,7 @@ const HOME_SECTION_DEFS = [
 const DEFAULT_HOME_SETTINGS = {
   sectionOrder: ["emergencyCalls","emergencyMode","centralHub","position","alerts","quickAccess","favorites","more"],
   hiddenSections: [],
-  quickAccess: ["central","prontidao","cenarios","navegacao"]
+  quickAccess: ["central","prontidao","diagnostico","cenarios","navegacao"]
 };
 
 function normalizeHomeSettings(value){
@@ -533,7 +558,7 @@ function getReadiness(){
 function saveReadiness(value){saveJSON(STORAGE.readiness,Array.isArray(value)?value:[])}
 function getPersonalProtocols(){const v=loadJSON(STORAGE.personalProtocols,[]);return Array.isArray(v)?v.filter(x=>x&&typeof x==="object"&&typeof x.title==="string"):[]}
 function getQuickCards(){const saved=loadJSON(STORAGE.quickCards,[]);if(!Array.isArray(saved)||!saved.length)return clone(QUICK_CARD_DEFAULTS);return saved}
-function getCentralMeta(){return Object.assign({lastFullTest:null,lastFullTestScore:0,lastReview:null},loadJSON(STORAGE.centralMeta,{}))}
+function getCentralMeta(){return Object.assign({lastFullTest:null,lastFullTestScore:0,lastReview:null,lastAutoDiagnostic:null,lastAutoDiagnosticScore:0,lastAutoDiagnosticOk:0,lastAutoDiagnosticReview:0,lastAutoDiagnosticFail:0},loadJSON(STORAGE.centralMeta,{}))}
 function saveCentralMeta(v){saveJSON(STORAGE.centralMeta,Object.assign(getCentralMeta(),v||{}))}
 function readinessStats(){const rows=getReadiness(),done=rows.filter(x=>x.status==="ok").length,review=rows.filter(x=>x.status==="review").length,fail=rows.filter(x=>x.status==="fail").length;return {rows,done,review,fail,total:rows.length,percent:rows.length?Math.round(done/rows.length*100):0}}
 function resourceReadinessStats(){const r=getSecondSpace(),ok=r.filter(x=>x.status==="ok").length,review=r.filter(x=>x.status==="review").length,fail=r.filter(x=>x.status==="fail").length;return {total:r.length,ok,review,fail}}
@@ -610,6 +635,267 @@ async function nativeCheckResource(item){
   }
   return {installed:false};
 }
+
+let autoDiagnosticRunning=false;
+
+function sleepMs(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+
+async function nativeAccessibilityStatus(){
+  try{
+    const p=nativeCentral().plugin;
+    if(!isNativeApp()||!p?.isAccessibilityEnabled)return {enabled:false,available:false};
+    const r=await p.isAccessibilityEnabled();
+    return {enabled:!!r?.enabled,available:true,connected:!!r?.connected};
+  }catch{return {enabled:false,available:false}}
+}
+
+async function openAccessibilitySettings(){
+  try{
+    const p=nativeCentral().plugin;
+    if(isNativeApp()&&p?.openAccessibilitySettings){await p.openAccessibilitySettings();return true}
+  }catch{}
+  showToast("Não foi possível abrir as configurações de Acessibilidade");
+  return false;
+}
+
+async function disableDiagnosticAccessibility(){
+  try{
+    const p=nativeCentral().plugin;
+    if(isNativeApp()&&p?.disableAccessibilityService){
+      const r=await p.disableAccessibilityService();
+      if(r?.disabled)showToast("Acessibilidade da Central desativada");
+      else showToast("Desative o serviço nas configurações do Android");
+      return !!r?.disabled;
+    }
+  }catch{}
+  return false;
+}
+
+async function nativeCanSystemAction(action){
+  try{
+    const p=nativeCentral().plugin;
+    if(!isNativeApp()||!p?.canOpenSystemAction)return {available:null};
+    const r=await p.canOpenSystemAction({action});
+    return {available:!!r?.available};
+  }catch{return {available:false}}
+}
+
+async function startNativeAppProbe(packageName,label){
+  try{
+    const p=nativeCentral().plugin;
+    if(!isNativeApp()||!p?.startAppProbe)return {started:false,reason:"bridge_unavailable"};
+    return await p.startAppProbe({packageName,label:label||packageName});
+  }catch(e){
+    return {started:false,reason:e?.message||"probe_error"};
+  }
+}
+
+async function getNativeAppProbeResult(packageName){
+  try{
+    const p=nativeCentral().plugin;
+    if(!isNativeApp()||!p?.getAppProbeResult)return {state:"unavailable"};
+    return await p.getAppProbeResult({packageName});
+  }catch{return {state:"error"}}
+}
+
+async function waitForNativeAppProbe(packageName,timeout=9000){
+  const started=Date.now();
+  while(Date.now()-started<timeout){
+    await sleepMs(450);
+    const r=await getNativeAppProbeResult(packageName);
+    if(["verified","timeout","launch_failed","cancelled"].includes(r?.state))return r;
+  }
+  return {state:"timeout"};
+}
+
+function diagnosticCandidateInfo(item){
+  if(item.internalView)return {kind:"internal",label:"Módulo interno da Central"};
+  if(item.systemAction)return {kind:"system",action:item.systemAction,label:"Função do Android"};
+  const packages=[item.packageName,item.altPackageName].filter(Boolean);
+  if(packages.length)return {kind:"package",packages,label:packages[0]};
+  return {kind:"manual",label:"Pacote Android não configurado"};
+}
+
+function diagnosticStateLabel(state){
+  if(state==="ok")return "CONFIRMADO";
+  if(state==="running")return "TESTANDO";
+  if(state==="fail")return "FALHOU";
+  return "REVISAR";
+}
+
+function updateDiagnosticRow(id,state,message){
+  const row=document.querySelector(`[data-diagnostic-row="${id}"]`);
+  if(!row)return;
+  const badge=row.querySelector(".diag-state"),note=row.querySelector("[data-diagnostic-note]");
+  if(badge){badge.className=`diag-state ${state}`;badge.textContent=diagnosticStateLabel(state)}
+  if(note&&message)note.textContent=message;
+}
+
+function diagnosticRowsHTML(){
+  return getSecondSpace().map(item=>{
+    const info=diagnosticCandidateInfo(item),state=item.status==="ok"?"ok":item.status==="fail"?"fail":"review";
+    const tested=item.lastTested?`Último teste: ${formatWhen(item.lastTested)}`:"Ainda não testado";
+    return `<div class="diagnostic-row" data-diagnostic-row="${item.id}">
+      <span class="diag-icon">${escapeHTML(item.icon||"📱")}</span>
+      <div><strong>${escapeHTML(item.name)}</strong><small data-diagnostic-note>${escapeHTML(info.label)} · ${escapeHTML(tested)}</small></div>
+      <span class="diag-state ${state}">${diagnosticStateLabel(state)}</span>
+    </div>`;
+  }).join("");
+}
+
+async function runAutomaticSecondSpaceDiagnostic(){
+  if(autoDiagnosticRunning)return;
+  if(!isNativeApp()){showToast("O diagnóstico automático está disponível no APK");return}
+
+  const access=await nativeAccessibilityStatus();
+  if(!access.enabled){
+    openModal("Ativar Acessibilidade",`
+      <div class="notice warning"><strong>Uma ação sua é necessária.</strong> O Android não permite que um app ative Acessibilidade sozinho.</div>
+      <p>Na tela que abrir, ative <strong>Diagnóstico da Sobrevivência Central</strong>. Depois volte para a Central e toque novamente em “Testar apps automaticamente”.</p>
+      <p>A Central usa o serviço somente para confirmar qual aplicativo ficou em primeiro plano durante o teste. Ela não lê textos nem toca em controles dos outros apps.</p>
+      <button class="btn primary full" data-action="accessibility-settings">Abrir Acessibilidade do Android</button>`);
+    return;
+  }
+
+  autoDiagnosticRunning=true;
+  const resources=getSecondSpace();
+  let ok=0,review=0,fail=0,done=0;
+  const progress=document.getElementById("autoDiagnosticProgress");
+  const live=document.getElementById("autoDiagnosticLive");
+  const startButton=document.getElementById("autoDiagnosticStart");
+  if(startButton)startButton.disabled=true;
+
+  const setProgress=(name)=>{
+    done++;
+    if(progress)progress.style.width=`${Math.round(done/resources.length*100)}%`;
+    if(live)live.textContent=name?`Concluído: ${name} · ${done}/${resources.length}`:`${done}/${resources.length}`;
+  };
+
+  try{
+    for(const item of resources){
+      updateDiagnosticRow(item.id,"running","Preparando teste…");
+      const info=diagnosticCandidateInfo(item);
+
+      if(info.kind==="internal"){
+        markSecondSpaceResource(item.id,"ok");
+        updateDiagnosticRow(item.id,"ok","Módulo interno disponível na própria Central.");
+        ok++;setProgress(item.name);continue;
+      }
+
+      if(info.kind==="system"){
+        const r=await nativeCanSystemAction(info.action);
+        if(r.available===true){
+          markSecondSpaceResource(item.id,"ok");
+          updateDiagnosticRow(item.id,"ok","Intent/função do Android disponível.");
+          ok++;
+        }else{
+          markSecondSpaceResource(item.id,"review");
+          updateDiagnosticRow(item.id,"review","O Android não confirmou essa função.");
+          review++;
+        }
+        setProgress(item.name);continue;
+      }
+
+      if(info.kind==="manual"){
+        markSecondSpaceResource(item.id,"review");
+        updateDiagnosticRow(item.id,"review","Pacote Android não configurado. Abra Central > Editar e informe o pacote para automatizar.");
+        review++;setProgress(item.name);continue;
+      }
+
+      let installed=null,selectedPackage=null;
+      for(const packageName of info.packages){
+        try{
+          const check=await nativeCentral().plugin.isAppInstalled({packageName});
+          if(check?.installed){installed=true;selectedPackage=packageName;break}
+          if(installed===null)installed=false;
+        }catch{}
+      }
+
+      if(installed!==true||!selectedPackage){
+        markSecondSpaceResource(item.id,"review");
+        updateDiagnosticRow(item.id,"review","App não encontrado pelo pacote configurado.");
+        review++;setProgress(item.name);continue;
+      }
+
+      updateDiagnosticRow(item.id,"running","Abrindo o app e aguardando confirmação da Acessibilidade…");
+      const started=await startNativeAppProbe(selectedPackage,item.name);
+      if(!started?.started){
+        markSecondSpaceResource(item.id,"fail");
+        updateDiagnosticRow(item.id,"fail","O Android encontrou o app, mas não conseguiu iniciá-lo.");
+        fail++;setProgress(item.name);continue;
+      }
+
+      const result=await waitForNativeAppProbe(selectedPackage,10000);
+      if(result?.state==="verified"){
+        markSecondSpaceResource(item.id,"ok");
+        updateDiagnosticRow(item.id,"ok","Abertura confirmada pela Acessibilidade.");
+        ok++;
+      }else{
+        markSecondSpaceResource(item.id,"review");
+        updateDiagnosticRow(item.id,"review","O app foi iniciado, mas a Acessibilidade não confirmou a janela a tempo.");
+        review++;
+      }
+      setProgress(item.name);
+      await sleepMs(350);
+    }
+
+    const total=Math.max(1,resources.length),score=Math.round(ok/total*100);
+    saveCentralMeta({
+      lastAutoDiagnostic:new Date().toISOString(),
+      lastAutoDiagnosticScore:score,
+      lastAutoDiagnosticOk:ok,
+      lastAutoDiagnosticReview:review,
+      lastAutoDiagnosticFail:fail,
+      lastReview:new Date().toISOString()
+    });
+
+    if(live)live.textContent=`Concluído: ${ok} confirmados · ${review} revisar · ${fail} falharam.`;
+    showToast(`Diagnóstico concluído: ${score}% confirmado`);
+  }finally{
+    autoDiagnosticRunning=false;
+    if(startButton)startButton.disabled=false;
+
+    // Privacidade: o serviço é desligado por ele mesmo quando possível.
+    await disableDiagnosticAccessibility();
+    setTimeout(()=>{if(currentView()==="diagnostico")renderAutoDiagnostic()},500);
+  }
+}
+
+async function renderAutoDiagnostic(){
+  const meta=getCentralMeta();
+  view.innerHTML=`${pageHeader("🔍","Diagnóstico automático","Testa os recursos configurados e confirma a abertura dos apps pelo Android.")}
+    <div class="diagnostic-hero">
+      <strong>Verificando Acessibilidade…</strong>
+      <small>O serviço só registra qual pacote apareceu em primeiro plano quando existe um teste ativo. Não lê o texto das telas, não captura imagens e não executa cliques dentro dos outros apps.</small>
+      <div id="diagnosticAccessControls" class="btn-row"></div>
+    </div>
+    <section class="panel priority-panel">
+      <div class="central-hero-head">
+        <div><strong>Teste automático dos apps</strong><small class="meta">Abre um app por vez, confirma a janela e retorna sozinho.</small></div>
+        <span class="central-score">${meta.lastAutoDiagnostic?`${meta.lastAutoDiagnosticScore||0}%`:"—"}</span>
+      </div>
+      <div class="diagnostic-progress"><span id="autoDiagnosticProgress"></span></div>
+      <button id="autoDiagnosticStart" class="btn primary full" data-action="auto-diagnostic">TESTAR APPS AUTOMATICAMENTE</button>
+      <div id="autoDiagnosticLive" class="diagnostic-live">${meta.lastAutoDiagnostic?`Último teste: ${formatWhen(meta.lastAutoDiagnostic)} · ${meta.lastAutoDiagnosticOk||0} confirmados · ${meta.lastAutoDiagnosticReview||0} revisar · ${meta.lastAutoDiagnosticFail||0} falharam.`:"Ainda não foi executado."}</div>
+    </section>
+    <section class="panel">
+      <h2>Recursos configurados</h2>
+      <div class="diagnostic-list">${diagnosticRowsHTML()}</div>
+    </section>
+    <div class="notice warning"><strong>Importante:</strong> confirmar que um app abriu não prova que todo o conteúdo dele está offline. Mapas baixados, bibliotecas do Kiwix, idiomas do tradutor e rádios continuam no checklist de Prontidão.</div>`;
+
+  const controls=document.getElementById("diagnosticAccessControls");
+  try{
+    const st=await nativeAccessibilityStatus();
+    if(currentView()!=="diagnostico"||!controls)return;
+    controls.innerHTML=st.enabled
+      ? `<span class="native-badge">✓ Acessibilidade ativa</span><button class="btn" data-action="accessibility-disable">Desativar agora</button>`
+      : `<span class="native-badge web">Acessibilidade desativada</span><button class="btn primary" data-action="accessibility-settings">Ativar Acessibilidade</button>`;
+  }catch{
+    if(controls)controls.innerHTML=`<span class="native-badge web">Estado indisponível</span>`;
+  }
+}
+
 function toggleCentralFavorite(id){const items=getSecondSpace(),item=items.find(x=>x.id===id);if(!item)return;item.favorite=!item.favorite;saveSecondSpace(items)}
 function markSecondSpaceResource(id,status){const items=getSecondSpace(),item=items.find(x=>x.id===id);if(!item)return;item.status=status;item.lastTested=new Date().toISOString();saveSecondSpace(items)}
 function readinessSet(id,status){const rows=getReadiness(),item=rows.find(x=>x.id===id);if(!item)return;item.status=status;item.testedAt=new Date().toISOString();saveReadiness(rows)}
@@ -1032,7 +1318,7 @@ function renderCentral(){
   const groups=["Navegação","Comunicação","Conhecimento","Saúde","Sinalização","Registro"];
   view.innerHTML=`${pageHeader("🛡️","Central do Segundo Espaço","Um ponto de entrada para o que já existe no aparelho. A Central não substitui os outros recursos: ela organiza e conecta.")}
     <section class="panel priority-panel"><div class="central-hero-head"><div><strong>Prontidão geral</strong><small class="meta">${att?`${att} ponto(s) pedindo atenção`:"Sem alertas registrados"}</small></div><span class="central-score">${centralScore()}%</span></div><div class="readiness-progress" style="margin-top:10px"><span style="width:${r.percent}%"></span></div><div class="btn-row"><button class="btn primary" data-nav="prontidao">🧪 Testar preparação</button><button class="btn" data-nav="status-central">📊 Estado da Central</button></div>${meta.lastFullTest?`<small class="meta">Último teste completo: ${formatWhen(meta.lastFullTest)}</small>`:""}</section>
-    <div class="central-dashboard"><button class="action-card" data-nav="cenarios"><span class="emoji">🚨</span><span><strong>Cenários integrados</strong><small>Perdido, emergência médica, apagão, enchente e mais.</small></span></button><button class="action-card" data-nav="cartoes"><span class="emoji">🖼️</span><span><strong>Cartões rápidos</strong><small>Imagens de consulta imediata da Biblioteca.</small></span></button><button class="action-card" data-nav="protocolos-pessoais"><span class="emoji">📋</span><span><strong>Protocolos pessoais</strong><small>Primeiros minutos e planos próprios.</small></span></button><button class="action-card" data-nav="biblioteca"><span class="emoji">📂</span><span><strong>Biblioteca Offline</strong><small>PDFs, vídeos e imagens locais.</small></span></button></div>
+    <div class="central-dashboard"><button class="action-card" data-nav="diagnostico"><span class="emoji">🔍</span><span><strong>Diagnóstico automático</strong><small>Confirma abertura dos apps com Acessibilidade.</small></span></button><button class="action-card" data-nav="cenarios"><span class="emoji">🚨</span><span><strong>Cenários integrados</strong><small>Perdido, emergência médica, apagão, enchente e mais.</small></span></button><button class="action-card" data-nav="cartoes"><span class="emoji">🖼️</span><span><strong>Cartões rápidos</strong><small>Imagens de consulta imediata da Biblioteca.</small></span></button><button class="action-card" data-nav="protocolos-pessoais"><span class="emoji">📋</span><span><strong>Protocolos pessoais</strong><small>Primeiros minutos e planos próprios.</small></span></button><button class="action-card" data-nav="biblioteca"><span class="emoji">📂</span><span><strong>Biblioteca Offline</strong><small>PDFs, vídeos e imagens locais.</small></span></button></div>
     ${resources.some(x=>x.favorite)?`<div class="section-title"><h2>⭐ Favoritos da Central</h2><span>${resources.filter(x=>x.favorite).length}</span></div><div class="central-resource-grid">${resources.filter(x=>x.favorite).map(centralResourceCard).join("")}</div>`:""}
     ${groups.map(group=>{const list=resources.filter(x=>x.category===group);return list.length?`<div class="section-title"><h2>${group}</h2><span>${list.length}</span></div><div class="central-resource-grid">${list.map(centralResourceCard).join("")}</div>`:""}).join("")}
     <div class="notice warning"><strong>Redundância consciente:</strong> protocolo curto da Central primeiro; mapa, Kiwix, PDFs, vídeos e apps dedicados entram como segunda camada.</div>`;
@@ -1062,7 +1348,7 @@ async function renderCentralStatus(){
   view.innerHTML=`${pageHeader("📊","Estado da Central","Verificando o ambiente…")}<section class="panel"><small>Executando autoteste da camada Android…</small></section>`;
   const native=isNativeApp(),[bridgeOk,battery]=await Promise.all([nativePing(),nativeBatteryLevel()]),r=readinessStats(),resourceStats=resourceReadinessStats(),meta=getCentralMeta();
   if(currentView()!=="status-central")return;
-  view.innerHTML=`${pageHeader("📊","Estado da Central","Resumo técnico e operacional do aplicativo.")}<section class="panel priority-panel"><div class="status-line"><span>Execução</span><span class="${native?"native-badge":"native-badge web"}">${native?"APK NATIVO":"PWA / WEB"}</span></div><div class="status-line"><span>Versão</span><span class="pill">V${APP_VERSION}</span></div><div class="status-line"><span>Ponte Android</span><span class="pill">${native?(bridgeOk?"✓ pronta":"⚠ indisponível"):"não aplicável"}</span></div>${native?`<div class="status-line"><span>Bateria do aparelho</span><span class="pill">${battery===null?"indisponível":battery+"%"}</span></div>`:""}<div class="status-line"><span>Prontidão manual</span><span class="pill">${r.percent}%</span></div><div class="status-line"><span>Recursos do segundo espaço</span><span class="pill">${resourceStats.total}</span></div><div class="status-line"><span>Último teste completo</span><span class="pill">${meta.lastFullTest?formatWhen(meta.lastFullTest):"nunca"}</span></div></section><section class="panel"><h2>Camadas de redundância</h2><ol class="protocol"><li><strong>Emergência:</strong> números + protocolo curto.</li><li><strong>Ferramentas:</strong> GPS, água, energia, checklist e comunicação.</li><li><strong>Recursos do aparelho:</strong> MAPS.ME, Gaia, Meshtastic, Bitchat, Kiwix, tradutor etc.</li><li><strong>Conhecimento aprofundado:</strong> Biblioteca, PDFs, vídeos e Kiwix.</li></ol></section><section class="panel"><h2>Armazenamento</h2><p>Dados pequenos continuam em localStorage; índice/permissões da Biblioteca em IndexedDB; arquivos binários permanecem fora do banco e do backup.</p><button class="btn primary full" data-nav="dados">Backup e autoteste</button></section>`;
+  view.innerHTML=`${pageHeader("📊","Estado da Central","Resumo técnico e operacional do aplicativo.")}<section class="panel priority-panel"><div class="status-line"><span>Execução</span><span class="${native?"native-badge":"native-badge web"}">${native?"APK NATIVO":"PWA / WEB"}</span></div><div class="status-line"><span>Versão</span><span class="pill">V${APP_VERSION}</span></div><div class="status-line"><span>Ponte Android</span><span class="pill">${native?(bridgeOk?"✓ pronta":"⚠ indisponível"):"não aplicável"}</span></div>${native?`<div class="status-line"><span>Bateria do aparelho</span><span class="pill">${battery===null?"indisponível":battery+"%"}</span></div>`:""}<div class="status-line"><span>Prontidão manual</span><span class="pill">${r.percent}%</span></div><div class="status-line"><span>Recursos do segundo espaço</span><span class="pill">${resourceStats.total}</span></div><div class="status-line"><span>Último teste completo</span><span class="pill">${meta.lastFullTest?formatWhen(meta.lastFullTest):"nunca"}</span></div><div class="status-line"><span>Último diagnóstico automático</span><span class="pill">${meta.lastAutoDiagnostic?`${formatWhen(meta.lastAutoDiagnostic)} · ${meta.lastAutoDiagnosticScore||0}%`:"nunca"}</span></div></section><section class="panel"><h2>Camadas de redundância</h2><ol class="protocol"><li><strong>Emergência:</strong> números + protocolo curto.</li><li><strong>Ferramentas:</strong> GPS, água, energia, checklist e comunicação.</li><li><strong>Recursos do aparelho:</strong> MAPS.ME, Gaia, Meshtastic, Bitchat, Kiwix, tradutor etc.</li><li><strong>Conhecimento aprofundado:</strong> Biblioteca, PDFs, vídeos e Kiwix.</li></ol></section><section class="panel"><h2>Armazenamento</h2><p>Dados pequenos continuam em localStorage; índice/permissões da Biblioteca em IndexedDB; arquivos binários permanecem fora do banco e do backup.</p><div class="btn-row"><button class="btn primary" data-nav="diagnostico">🔍 Diagnóstico automático</button><button class="btn" data-nav="dados">Backup e autoteste</button></div></section>`;
 }
 
 function renderCrisisEnhancement(){return `<div class="section-title"><h2>Recursos do aparelho</h2><span>APK: abertura direta</span></div><div class="central-mini-grid"><button data-central-open="mapsme">🗺️ MAPS.ME</button><button data-central-open="meshtastic">📡 Meshtastic</button><button data-central-open="kiwix">📚 Kiwix</button></div>`}
@@ -1251,7 +1537,7 @@ function backupPayload(){return {app:"Sobrevivência Offline",version:APP_VERSIO
 function renderData(){const bm=getBackupMeta();view.innerHTML=`${pageHeader("💾","Backup e autoteste","Confirme se o app está realmente pronto para funcionar sem rede e mantenha um backup local.")}<section class="panel priority-panel"><h2>Autoteste offline</h2><button class="btn primary full" data-action="self-test">Executar teste completo</button><div id="selfTestResult" style="margin-top:10px"></div></section><section class="panel"><h2>Versão instalada</h2><div class="status-line"><span>Aplicativo</span><span class="pill">V${APP_VERSION}</span></div><div class="status-line"><span>Schema de dados</span><span class="pill">V${CURRENT_SCHEMA}</span></div><div class="status-line"><span>Cache esperado</span><span class="pill">${EXPECTED_CACHE}</span></div></section><section class="panel"><h2>Estado dos dados</h2><div class="status-line"><span>Checklist</span><span class="pill">${getChecklist().length}</span></div><div class="status-line"><span>Contatos</span><span class="pill">${getContacts().length}</span></div><div class="status-line"><span>Diário</span><span class="pill">${getJournal().length}</span></div><div class="status-line"><span>Estoque</span><span class="pill">${getInventory().length}</span></div><div class="status-line"><span>Biblioteca (metadados)</span><span id="libraryDataCount" class="pill">…</span></div><div class="status-line"><span>Prontidão</span><span class="pill">${readinessStats().percent}%</span></div><div class="status-line"><span>Modo</span><span class="pill">${isNativeApp()?"APK":"PWA"}</span></div></section><section class="panel"><h2>Backup completo</h2><p>A importação é parcial por campo: campos presentes e válidos substituem os correspondentes; campos ausentes preservam o que já existe. Registros inválidos são ignorados individualmente.</p><div class="notice"><strong>Biblioteca:</strong> o backup guarda apenas nome, tipo, tags, categoria e outros metadados. O conteúdo de fotos, vídeos e PDFs e as permissões/handles do aparelho não entram no JSON.</div>${bm?`<div class="backup-meta"><strong>Último backup exportado</strong><small>${formatWhen(bm.created)} · app ${escapeHTML(bm.version)} · schema ${escapeHTML(bm.schema)}</small></div>`:""}<div class="btn-row"><button class="btn primary" data-action="export">Exportar</button><button class="btn" data-action="import">Importar</button></div></section><section class="panel"><h2>Limpar tudo</h2><p>Apaga dados e índice da Biblioteca, mas nunca apaga os arquivos originais escolhidos no Android.</p><button class="btn danger" data-action="clear">Apagar dados locais</button></section>`;setTimeout(updateLibraryDataCount,0)}
 
 function stopCompass(){if(compassHandler&&compassEventName)window.removeEventListener(compassEventName,compassHandler,true);compassHandler=null;compassEventName=null}
-function renderView(name){if(currentViewName==="biblioteca"&&name!=="biblioteca")cleanupLibraryThumbUrls();cleanupLibraryViewerUrls();stopCompass();currentViewName=name;const map={home:renderHome,"modo-emergencia":renderEmergencyMode,central:renderCentral,prontidao:renderReadiness,cenarios:renderScenarios,cartoes:renderQuickCards,"protocolos-pessoais":renderPersonalProtocols,"status-central":renderCentralStatus,emergencias:renderEmergencies,agua:renderWater,abrigo:renderShelter,nos:renderKnots,navegacao:renderNavigation,energia:renderEnergy,comunicacao:renderCommunication,checklist:renderChecklist,calculadoras:renderCalculators,contatos:renderContacts,numeros:renderEmergencyNumbers,plano:renderPlan,ice:renderICE,diario:renderJournal,estoque:renderInventory,manutencao:renderMaintenance,recursos:renderResources,biblioteca:renderLibrary,dados:renderData,fontes:renderSources,"personalizar-home":renderHomeSettings,mais:renderMore};(map[name]||renderHome)();const more=["central","prontidao","cenarios","cartoes","protocolos-pessoais","status-central","agua","abrigo","nos","navegacao","energia","comunicacao","contatos","numeros","plano","ice","diario","estoque","manutencao","recursos","biblioteca","dados","fontes","personalizar-home"];document.querySelectorAll(".nav-button").forEach(b=>b.classList.toggle("active",b.dataset.nav===name||(b.dataset.nav==="mais"&&more.includes(name))));window.scrollTo(0,0)}
+function renderView(name){if(currentViewName==="biblioteca"&&name!=="biblioteca")cleanupLibraryThumbUrls();cleanupLibraryViewerUrls();stopCompass();currentViewName=name;const map={home:renderHome,"modo-emergencia":renderEmergencyMode,central:renderCentral,prontidao:renderReadiness,diagnostico:renderAutoDiagnostic,cenarios:renderScenarios,cartoes:renderQuickCards,"protocolos-pessoais":renderPersonalProtocols,"status-central":renderCentralStatus,emergencias:renderEmergencies,agua:renderWater,abrigo:renderShelter,nos:renderKnots,navegacao:renderNavigation,energia:renderEnergy,comunicacao:renderCommunication,checklist:renderChecklist,calculadoras:renderCalculators,contatos:renderContacts,numeros:renderEmergencyNumbers,plano:renderPlan,ice:renderICE,diario:renderJournal,estoque:renderInventory,manutencao:renderMaintenance,recursos:renderResources,biblioteca:renderLibrary,dados:renderData,fontes:renderSources,"personalizar-home":renderHomeSettings,mais:renderMore};(map[name]||renderHome)();const more=["central","prontidao","cenarios","cartoes","protocolos-pessoais","status-central","agua","abrigo","nos","navegacao","energia","comunicacao","contatos","numeros","plano","ice","diario","estoque","manutencao","recursos","biblioteca","dados","fontes","personalizar-home"];document.querySelectorAll(".nav-button").forEach(b=>b.classList.toggle("active",b.dataset.nav===name||(b.dataset.nav==="mais"&&more.includes(name))));window.scrollTo(0,0)}
 
 const radians=v=>v*Math.PI/180, degrees=v=>v*180/Math.PI;
 function distanceBearing(lat1,lon1,lat2,lon2){const R=6371.0088,p1=radians(lat1),p2=radians(lat2),dLat=radians(lat2-lat1),dLon=radians(lon2-lon1),a=Math.sin(dLat/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dLon/2)**2,c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)),y=Math.sin(dLon)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dLon);return {distance:R*c,bearing:(degrees(Math.atan2(y,x))+360)%360}}
@@ -1346,7 +1632,7 @@ function isPlainObject(v){return !!v&&typeof v==="object"&&!Array.isArray(v)}
 function validOptionalString(v){return v===undefined||v===null||typeof v==="string"}
 function trimString(v,max=500){return typeof v==="string"?v.slice(0,max):""}
 function sanitizeBackupArray(name,value,warnings){if(!Array.isArray(value)){warnings.push(`${name}: ignorado porque não é uma lista`);return null}const out=[];for(const raw of value){let clean=null;if(name==="checklist"&&isPlainObject(raw)&&typeof raw.text==="string"&&raw.text.trim())clean={id:typeof raw.id==="string"?raw.id:uid("check"),text:trimString(raw.text,120),category:trimString(raw.category,80),done:!!raw.done};else if(name==="contacts"&&isPlainObject(raw)&&typeof raw.name==="string"&&typeof raw.phone==="string"&&raw.name.trim()&&raw.phone.trim())clean={id:typeof raw.id==="string"?raw.id:uid("contact"),name:trimString(raw.name,100),phone:trimString(raw.phone,60),note:trimString(raw.note,180),icon:trimString(raw.icon,4)||"📞",category:trimString(raw.category,80)||"Pessoal"};else if(name==="favorites"&&typeof raw==="string"&&(raw.startsWith("emergency:")||raw.startsWith("view:")))clean=raw;else if(name==="journal"&&isPlainObject(raw)&&typeof raw.text==="string"&&raw.text.trim())clean={id:typeof raw.id==="string"?raw.id:uid("journal"),timestamp:validOptionalString(raw.timestamp)?raw.timestamp:new Date().toISOString(),type:trimString(raw.type,60),text:trimString(raw.text,3000),position:isPlainObject(raw.position)&&Number.isFinite(Number(raw.position.lat))&&Number.isFinite(Number(raw.position.lon))?{lat:Number(raw.position.lat),lon:Number(raw.position.lon)}:null};else if(name==="inventory"&&isPlainObject(raw)&&typeof raw.name==="string"&&raw.name.trim()&&Number.isFinite(Number(raw.quantity)))clean={id:typeof raw.id==="string"?raw.id:uid("stock"),name:trimString(raw.name,120),category:trimString(raw.category,80),quantity:Math.max(0,Number(raw.quantity)),unit:trimString(raw.unit,40),minimum:Math.max(0,Number(raw.minimum)||0),expiry:trimString(raw.expiry,20)};else if(name==="maintenance"&&isPlainObject(raw)&&typeof raw.name==="string"&&raw.name.trim())clean={id:typeof raw.id==="string"?raw.id:uid("maint"),name:trimString(raw.name,120),due:trimString(raw.due,20),note:trimString(raw.note,300)};else if(name==="resources"&&isPlainObject(raw)&&typeof raw.name==="string"&&typeof raw.type==="string"&&raw.name.trim())clean={id:typeof raw.id==="string"?raw.id:uid("res"),type:trimString(raw.type,60),name:trimString(raw.name,180),reference:trimString(raw.reference,600),note:trimString(raw.note,500)};else if(name==="secondSpace"&&isPlainObject(raw)&&typeof raw.name==="string"&&raw.name.trim())clean={id:trimString(raw.id,100)||uid("app"),icon:trimString(raw.icon,8)||"📱",name:trimString(raw.name,120),category:trimString(raw.category,80),role:trimString(raw.role,400),packageName:trimString(raw.packageName,180),altPackageName:trimString(raw.altPackageName,180),internalView:trimString(raw.internalView,80),systemAction:trimString(raw.systemAction,80),primary:!!raw.primary,favorite:!!raw.favorite,backupFor:trimString(raw.backupFor,180),status:["ok","review","fail","pending"].includes(raw.status)?raw.status:"pending",lastTested:validOptionalString(raw.lastTested)?raw.lastTested:null};else if(name==="readiness"&&isPlainObject(raw)&&typeof raw.title==="string"&&raw.title.trim())clean={id:trimString(raw.id,100)||uid("ready"),icon:trimString(raw.icon,8)||"✓",title:trimString(raw.title,220),group:trimString(raw.group,80),status:["ok","review","fail","pending"].includes(raw.status)?raw.status:"pending",testedAt:validOptionalString(raw.testedAt)?raw.testedAt:null,note:trimString(raw.note,500)};else if(name==="personalProtocols"&&isPlainObject(raw)&&typeof raw.title==="string"&&raw.title.trim())clean={id:trimString(raw.id,100)||uid("protocol"),title:trimString(raw.title,120),trigger:trimString(raw.trigger,300),steps:trimString(raw.steps,6000),updatedAt:validOptionalString(raw.updatedAt)?raw.updatedAt:null};else if(name==="quickCards"&&isPlainObject(raw)&&typeof raw.title==="string"&&raw.title.trim())clean={id:trimString(raw.id,100)||uid("card"),icon:trimString(raw.icon,8)||"🖼️",title:trimString(raw.title,120),query:trimString(raw.query,200),note:trimString(raw.note,400)};if(clean!==null)out.push(clean);else warnings.push(`${name}: um registro inválido foi ignorado`)}return out}
-function sanitizeBackupObject(name,value,warnings){if(!isPlainObject(value)){warnings.push(`${name}: ignorado porque não é um objeto`);return null}if(name==="plan")return {meeting:trimString(value.meeting,300),backupMeeting:trimString(value.backupMeeting,300),radio:trimString(value.radio,300),checkin:trimString(value.checkin,300),backupMethod:trimString(value.backupMethod,300),message:trimString(value.message,1000),notes:trimString(value.notes,2000)};if(name==="ice")return {name:trimString(value.name,120),birthDate:trimString(value.birthDate,20),iceName:trimString(value.iceName,120),icePhone:trimString(value.icePhone,60),bloodType:trimString(value.bloodType,20),allergies:trimString(value.allergies,800),medications:trimString(value.medications,800),conditions:trimString(value.conditions,800),notes:trimString(value.notes,1200)};if(name==="settings"){const out={};if(Object.prototype.hasOwnProperty.call(value,"textLarge"))out.textLarge=!!value.textLarge;if(Object.prototype.hasOwnProperty.call(value,"home"))out.home=normalizeHomeSettings(value.home);if(Object.prototype.hasOwnProperty.call(value,"emergencyQuick"))out.emergencyQuick=normalizeEmergencyQuick(value.emergencyQuick);return out};if(name==="centralMeta")return {lastFullTest:validOptionalString(value.lastFullTest)?value.lastFullTest:null,lastFullTestScore:Math.max(0,Math.min(100,Number(value.lastFullTestScore)||0)),lastReview:validOptionalString(value.lastReview)?value.lastReview:null};return null}
+function sanitizeBackupObject(name,value,warnings){if(!isPlainObject(value)){warnings.push(`${name}: ignorado porque não é um objeto`);return null}if(name==="plan")return {meeting:trimString(value.meeting,300),backupMeeting:trimString(value.backupMeeting,300),radio:trimString(value.radio,300),checkin:trimString(value.checkin,300),backupMethod:trimString(value.backupMethod,300),message:trimString(value.message,1000),notes:trimString(value.notes,2000)};if(name==="ice")return {name:trimString(value.name,120),birthDate:trimString(value.birthDate,20),iceName:trimString(value.iceName,120),icePhone:trimString(value.icePhone,60),bloodType:trimString(value.bloodType,20),allergies:trimString(value.allergies,800),medications:trimString(value.medications,800),conditions:trimString(value.conditions,800),notes:trimString(value.notes,1200)};if(name==="settings"){const out={};if(Object.prototype.hasOwnProperty.call(value,"textLarge"))out.textLarge=!!value.textLarge;if(Object.prototype.hasOwnProperty.call(value,"home"))out.home=normalizeHomeSettings(value.home);if(Object.prototype.hasOwnProperty.call(value,"emergencyQuick"))out.emergencyQuick=normalizeEmergencyQuick(value.emergencyQuick);return out};if(name==="centralMeta")return {lastFullTest:validOptionalString(value.lastFullTest)?value.lastFullTest:null,lastFullTestScore:Math.max(0,Math.min(100,Number(value.lastFullTestScore)||0)),lastReview:validOptionalString(value.lastReview)?value.lastReview:null,lastAutoDiagnostic:validOptionalString(value.lastAutoDiagnostic)?value.lastAutoDiagnostic:null,lastAutoDiagnosticScore:Math.max(0,Math.min(100,Number(value.lastAutoDiagnosticScore)||0)),lastAutoDiagnosticOk:Math.max(0,Number(value.lastAutoDiagnosticOk)||0),lastAutoDiagnosticReview:Math.max(0,Number(value.lastAutoDiagnosticReview)||0),lastAutoDiagnosticFail:Math.max(0,Number(value.lastAutoDiagnosticFail)||0)};return null}
 function validateBackup(raw){if(!isPlainObject(raw))throw new Error("O arquivo JSON não contém um objeto de backup válido.");if(raw.app!==undefined&&raw.app!=="Sobrevivência Offline")throw new Error("Este JSON identifica outro aplicativo e não será importado.");const warnings=[],clean={},arrayFields=["checklist","contacts","favorites","journal","inventory","maintenance","resources","secondSpace","readiness","personalProtocols","quickCards"],objectFields=["plan","ice","settings","centralMeta"];let recognized=0;for(const field of arrayFields)if(Object.prototype.hasOwnProperty.call(raw,field)){recognized++;const v=sanitizeBackupArray(field,raw[field],warnings);if(v!==null)clean[field]=v}for(const field of objectFields)if(Object.prototype.hasOwnProperty.call(raw,field)){recognized++;const v=sanitizeBackupObject(field,raw[field],warnings);if(v!==null)clean[field]=v}if(Object.prototype.hasOwnProperty.call(raw,"lastPosition")){recognized++;const pos=raw.lastPosition;if(pos===null)clean.lastPosition=null;else if(isPlainObject(pos)&&Number.isFinite(Number(pos.lat))&&Number.isFinite(Number(pos.lon))&&Math.abs(Number(pos.lat))<=90&&Math.abs(Number(pos.lon))<=180)clean.lastPosition={lat:Number(pos.lat),lon:Number(pos.lon),accuracy:Math.max(0,Number(pos.accuracy)||0),timestamp:validOptionalString(pos.timestamp)?pos.timestamp:null};else warnings.push("lastPosition: posição inválida ignorada")}if(Object.prototype.hasOwnProperty.call(raw,"library")){recognized++;const lib=sanitizeLibraryBackup(raw.library,warnings);if(lib)clean.library=lib}if(!recognized)throw new Error("Nenhum campo de dados reconhecido. O arquivo não parece ser um backup do Sobrevivência Offline.");if(raw.app===undefined&&raw.version===undefined&&raw.schema===undefined&&recognized<2)throw new Error("JSON válido, mas sem identificação suficiente para ser tratado como backup do app.");return {clean,warnings,version:raw.version??"antigo/não informado",schema:raw.schema??"antigo/não informado",created:raw.created??null}}
 async function exportBackup(){const data=backupPayload();data.library=await libraryBackupSnapshot();const created=data.created;saveJSON(STORAGE.backupMeta,{created,version:APP_VERSION,schema:CURRENT_SCHEMA});const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`sobrevivencia-backup-v${APP_VERSION}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);showToast("Backup exportado: dados + metadados da Biblioteca; sem arquivos binários");if(currentView()==="dados")renderData()}
 async function importBackup(file){try{const parsed=JSON.parse(await file.text()),checked=validateBackup(parsed),summary=`Backup validado. Versão: ${checked.version} | Schema: ${checked.schema}${checked.warnings.length?` | Avisos: ${checked.warnings.length}`:" | Sem erros estruturais detectados"}.\n\nPolítica: somente campos presentes e válidos serão atualizados. Campos ausentes do backup antigo serão preservados. Arquivos da Biblioteca nunca são copiados do JSON.\n\nImportar?`;if(!confirm(summary))return;const mappings=[["checklist",STORAGE.checklist],["contacts",STORAGE.contacts],["plan",STORAGE.plan],["favorites",STORAGE.favorites],["lastPosition",STORAGE.lastPosition],["ice",STORAGE.ice],["journal",STORAGE.journal],["inventory",STORAGE.inventory],["maintenance",STORAGE.maintenance],["resources",STORAGE.resources],["secondSpace",STORAGE.secondSpace],["readiness",STORAGE.readiness],["personalProtocols",STORAGE.personalProtocols],["quickCards",STORAGE.quickCards],["centralMeta",STORAGE.centralMeta],["settings",STORAGE.settings]];for(const [field,key] of mappings)if(Object.prototype.hasOwnProperty.call(checked.clean,field)){if(field==="settings"){const current=getSettings(),incoming=checked.clean.settings||{},merged={...current,...incoming,home:incoming.home?normalizeHomeSettings(incoming.home):current.home};saveJSON(key,merged)}else saveJSON(key,checked.clean[field]);}let libCount=0;if(checked.clean.library)libCount=await importLibraryMetadata(checked.clean.library);migrateData();applySettings();const detail=checked.warnings.length?` ${checked.warnings.length} aviso(s); registros inválidos foram ignorados.`:"";showToast(`Backup importado.${detail}${libCount?` ${libCount} metadado(s) da Biblioteca mesclados.`:""}`);renderView("dados")}catch(e){showToast(e?.message||"Backup inválido ou incompatível")}finally{importInput.value=""}}
@@ -1401,7 +1687,7 @@ view.addEventListener("click",async event=>{
   const pairs=[["[data-edit-check]",editChecklist,"editCheck"],["[data-edit-contact]",editContact,"editContact"],["[data-edit-inventory]",editInventory,"editInventory"],["[data-edit-maintenance]",editMaintenance,"editMaintenance"],["[data-edit-resource]",editResource,"editResource"]];for(const [sel,fn,key] of pairs){const b=event.target.closest(sel);if(b){fn(b.dataset[key]);return}}
   const deleteContactButton=event.target.closest("[data-delete-contact]");if(deleteContactButton){const id=deleteContactButton.dataset.deleteContact;if(confirm("Excluir este contato?")){saveJSON(STORAGE.contacts,getContacts().filter(x=>x.id!==id));removeEmergencyQuick(`contact:${id}`);currentView()==="numeros"?renderEmergencyNumbers():renderContacts()}return}
   const deletes=[["[data-delete-check]",STORAGE.checklist,getChecklist,renderChecklist,"deleteCheck"],["[data-delete-journal]",STORAGE.journal,getJournal,renderJournal,"deleteJournal"],["[data-delete-inventory]",STORAGE.inventory,getInventory,renderInventory,"deleteInventory"],["[data-delete-maintenance]",STORAGE.maintenance,getMaintenance,renderMaintenance,"deleteMaintenance"],["[data-delete-resource]",STORAGE.resources,getResources,renderResources,"deleteResource"]];for(const [sel,key,getter,renderer,dataKey] of deletes){const b=event.target.closest(sel);if(b){if(confirm("Excluir este registro?")){saveJSON(key,getter().filter(x=>x.id!==b.dataset[dataKey]));renderer()}return}}
-  const action=event.target.closest("[data-action]");if(action){switch(action.dataset.action){case"export":exportBackup();break;case"import":importInput.click();break;case"clear":clearData();break;case"self-test":runSelfTest();break;case"library-add-files":addLibraryFiles();break;case"library-add-folder":addLibraryFolder();break;case"library-native-folder":addNativeLibraryFolder();break;case"library-refresh":refreshLibraryFolders();if(isNativeApp())refreshNativeLibraryFolders();break;case"readiness-reset":{if(confirm("Iniciar um novo teste de prontidão?")){const rows=getReadiness();rows.forEach(x=>{x.status="pending";x.testedAt=null});saveReadiness(rows);renderReadiness()}break}case"readiness-finish":{const s=readinessStats();saveCentralMeta({lastFullTest:new Date().toISOString(),lastFullTestScore:s.percent,lastReview:new Date().toISOString()});showToast(`Teste registrado: ${s.percent}%`);renderReadiness();break}case"library-reconnect":reconnectLibraryPermissions();break;case"library-more":libraryState.limit+=60;renderLibrary();break;case"check-all":{const a=getChecklist();a.forEach(i=>i.done=true);saveJSON(STORAGE.checklist,a);renderChecklist();break}case"uncheck-all":{const a=getChecklist();a.forEach(i=>i.done=false);saveJSON(STORAGE.checklist,a);renderChecklist();break}case"clear-done":{const a=getChecklist(),done=a.filter(i=>i.done).length;if(done&&confirm(`Excluir ${done} item(ns) concluído(s)?`)){saveJSON(STORAGE.checklist,a.filter(i=>!i.done));renderChecklist()}break}case"toggle-text":{const st=getSettings();st.textLarge=!st.textLarge;saveJSON(STORAGE.settings,st);applySettings();renderMore();break}case"reset-home-settings":{const current=getSettings();const st={textLarge:current.textLarge,home:normalizeHomeSettings(DEFAULT_HOME_SETTINGS),emergencyQuick:current.emergencyQuick};saveJSON(STORAGE.settings,st);showToast("Tela inicial restaurada");renderHomeSettings();break}case"repair-home-settings":{const current=getSettings();const st={textLarge:current.textLarge,home:normalizeHomeSettings(DEFAULT_HOME_SETTINGS),emergencyQuick:current.emergencyQuick};saveJSON(STORAGE.settings,st);showToast("Tela inicial restaurada");renderView("home");break}case"start-compass":startCompass();break;case"stop-compass":stopCompass();const n=document.getElementById("compassNote");if(n)n.textContent="Sensor parado.";break}}
+  const action=event.target.closest("[data-action]");if(action){switch(action.dataset.action){case"export":exportBackup();break;case"import":importInput.click();break;case"clear":clearData();break;case"self-test":runSelfTest();break;case"accessibility-settings":openAccessibilitySettings();break;case"accessibility-disable":disableDiagnosticAccessibility().then(()=>setTimeout(()=>{if(currentView()==="diagnostico")renderAutoDiagnostic()},300));break;case"auto-diagnostic":runAutomaticSecondSpaceDiagnostic();break;case"library-add-files":addLibraryFiles();break;case"library-add-folder":addLibraryFolder();break;case"library-native-folder":addNativeLibraryFolder();break;case"library-refresh":refreshLibraryFolders();if(isNativeApp())refreshNativeLibraryFolders();break;case"readiness-reset":{if(confirm("Iniciar um novo teste de prontidão?")){const rows=getReadiness();rows.forEach(x=>{x.status="pending";x.testedAt=null});saveReadiness(rows);renderReadiness()}break}case"readiness-finish":{const s=readinessStats();saveCentralMeta({lastFullTest:new Date().toISOString(),lastFullTestScore:s.percent,lastReview:new Date().toISOString()});showToast(`Teste registrado: ${s.percent}%`);renderReadiness();break}case"library-reconnect":reconnectLibraryPermissions();break;case"library-more":libraryState.limit+=60;renderLibrary();break;case"check-all":{const a=getChecklist();a.forEach(i=>i.done=true);saveJSON(STORAGE.checklist,a);renderChecklist();break}case"uncheck-all":{const a=getChecklist();a.forEach(i=>i.done=false);saveJSON(STORAGE.checklist,a);renderChecklist();break}case"clear-done":{const a=getChecklist(),done=a.filter(i=>i.done).length;if(done&&confirm(`Excluir ${done} item(ns) concluído(s)?`)){saveJSON(STORAGE.checklist,a.filter(i=>!i.done));renderChecklist()}break}case"toggle-text":{const st=getSettings();st.textLarge=!st.textLarge;saveJSON(STORAGE.settings,st);applySettings();renderMore();break}case"reset-home-settings":{const current=getSettings();const st={textLarge:current.textLarge,home:normalizeHomeSettings(DEFAULT_HOME_SETTINGS),emergencyQuick:current.emergencyQuick};saveJSON(STORAGE.settings,st);showToast("Tela inicial restaurada");renderHomeSettings();break}case"repair-home-settings":{const current=getSettings();const st={textLarge:current.textLarge,home:normalizeHomeSettings(DEFAULT_HOME_SETTINGS),emergencyQuick:current.emergencyQuick};saveJSON(STORAGE.settings,st);showToast("Tela inicial restaurada");renderView("home");break}case"start-compass":startCompass();break;case"stop-compass":stopCompass();const n=document.getElementById("compassNote");if(n)n.textContent="Sensor parado.";break}}
 });
 view.addEventListener("input",e=>{if(e.target.id==="emergencySearch"){const box=document.getElementById("emergencyList");if(box)box.innerHTML=renderEmergencyList(searchEmergencies(e.target.value),!e.target.value.trim());return}if(e.target.id==="librarySearch"){libraryState.query=e.target.value;libraryState.limit=60;clearTimeout(e.target._libTimer);e.target._libTimer=setTimeout(()=>renderLibrary(),180);return}if(e.target.id==="globalSearch"){clearTimeout(e.target._globalTimer);const value=e.target.value;e.target._globalTimer=setTimeout(()=>runGlobalSearch(value),120)}});
 view.addEventListener("change",e=>{if(e.target.id==="libraryCategory"){libraryState.category=e.target.value;libraryState.limit=60;renderLibrary();return}if(e.target.id==="librarySort"){libraryState.sort=e.target.value;libraryState.limit=60;renderLibrary();return}const c=e.target.closest("[data-check]");if(!c)return;const items=getChecklist(),i=items.find(x=>x.id===c.dataset.check);if(i){i.done=c.checked;saveJSON(STORAGE.checklist,items);renderChecklist()}});
