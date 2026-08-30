@@ -2,15 +2,16 @@ package br.com.sobrevivencia.central;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.ComponentName;
+import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.BatteryManager;
-import android.os.Handler;
-import android.os.Looper;
+import android.os.PowerManager;
+import android.os.Process;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
 
@@ -27,10 +28,16 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
-import java.util.Locale;
+import java.util.List;
 import java.util.Set;
 
 @CapacitorPlugin(
@@ -43,11 +50,6 @@ import java.util.Set;
 public class CentralBridgePlugin extends Plugin {
     private static final String PREFS = "central_native";
     private static final String FOLDERS = "folders";
-    private static final String PROBE_ACTIVE = "probe_active";
-    private static final String PROBE_TARGET = "probe_target";
-    private static final String PROBE_STATE = "probe_state";
-    private static final String PROBE_SEEN = "probe_seen";
-    private static final String PROBE_TIME = "probe_time";
 
     private JSObject locationPermissionResult() {
         PermissionState precise = getPermissionState("location");
@@ -134,183 +136,97 @@ public class CentralBridgePlugin extends Plugin {
         catch(Exception e){ JSObject r=new JSObject();r.put("opened",false);call.resolve(r); }
     }
 
-    private boolean accessibilityServiceEnabled() {
-        try {
-            String enabled = Settings.Secure.getString(
-                getContext().getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            );
-            if (enabled == null || enabled.isEmpty()) return false;
-
-            ComponentName expected = new ComponentName(getContext(), CentralAccessibilityService.class);
-            String[] parts = enabled.split(":");
-            for (String part : parts) {
-                ComponentName current = ComponentName.unflattenFromString(part);
-                if (current != null && current.equals(expected)) return true;
-            }
-        } catch (Exception ignored) {}
-        return false;
-    }
-
-    private void returnToCentral() {
-        try {
-            Intent launch = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                getContext().startActivity(launch);
-            }
-        } catch (Exception ignored) {}
-    }
-
-    @PluginMethod
-    public void isAccessibilityEnabled(PluginCall call) {
-        JSObject ret = new JSObject();
-        ret.put("enabled", accessibilityServiceEnabled());
-        ret.put("connected", CentralAccessibilityService.isConnected());
-        call.resolve(ret);
-    }
-
-    @PluginMethod
-    public void openAccessibilitySettings(PluginCall call) {
-        try {
-            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(intent);
-            JSObject ret = new JSObject();
-            ret.put("opened", true);
-            call.resolve(ret);
-        } catch (Exception e) {
-            JSObject ret = new JSObject();
-            ret.put("opened", false);
-            call.resolve(ret);
-        }
-    }
-
-    @PluginMethod
-    public void disableAccessibilityService(PluginCall call) {
-        boolean disabled = CentralAccessibilityService.disableServiceIfConnected();
-        JSObject ret = new JSObject();
-        ret.put("disabled", disabled);
-        call.resolve(ret);
-    }
-
-    @PluginMethod
-    public void canOpenSystemAction(PluginCall call) {
-        String action = call.getString("action", "");
-        Intent intent = null;
-        if ("camera".equals(action)) intent = new Intent("android.media.action.IMAGE_CAPTURE");
-        else if ("recorder".equals(action)) intent = new Intent("android.provider.MediaStore.RECORD_SOUND");
-
-        boolean available = false;
-        try {
-            available = intent != null && intent.resolveActivity(getContext().getPackageManager()) != null;
-        } catch (Exception ignored) {}
-
-        JSObject ret = new JSObject();
-        ret.put("available", available);
-        call.resolve(ret);
-    }
-
-    @PluginMethod
-    public void startAppProbe(PluginCall call) {
-        String packageName = call.getString("packageName", "").trim();
-        String label = call.getString("label", packageName);
-
-        JSObject ret = new JSObject();
-        if (packageName.isEmpty()) {
-            ret.put("started", false);
-            ret.put("reason", "package_missing");
-            call.resolve(ret);
-            return;
-        }
-
-        if (!accessibilityServiceEnabled()) {
-            ret.put("started", false);
-            ret.put("reason", "accessibility_disabled");
-            call.resolve(ret);
-            return;
-        }
-
-        Intent launch = null;
-        try {
-            launch = getContext().getPackageManager().getLaunchIntentForPackage(packageName);
-        } catch (Exception ignored) {}
-
-        if (launch == null) {
-            ret.put("started", false);
-            ret.put("reason", "not_installed");
-            call.resolve(ret);
-            return;
-        }
-
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        prefs.edit()
-            .putBoolean(PROBE_ACTIVE, true)
-            .putString(PROBE_TARGET, packageName)
-            .putString(PROBE_STATE, "pending")
-            .putString(PROBE_SEEN, "")
-            .putString("probe_label", label)
-            .putLong(PROBE_TIME, System.currentTimeMillis())
-            .apply();
-
-        try {
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(launch);
-
-            ret.put("started", true);
-            ret.put("packageName", packageName);
-            call.resolve(ret);
-
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                SharedPreferences current = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                if (current.getBoolean(PROBE_ACTIVE, false)
-                    && packageName.equals(current.getString(PROBE_TARGET, ""))
-                    && "pending".equals(current.getString(PROBE_STATE, ""))) {
-                    current.edit()
-                        .putString(PROBE_STATE, "timeout")
-                        .putLong(PROBE_TIME, System.currentTimeMillis())
-                        .apply();
-                    returnToCentral();
-                }
-            }, 6000);
-        } catch (Exception e) {
-            prefs.edit()
-                .putString(PROBE_STATE, "launch_failed")
-                .putBoolean(PROBE_ACTIVE, false)
-                .apply();
-            ret.put("started", false);
-            ret.put("reason", "launch_failed");
-            call.resolve(ret);
-        }
-    }
-
-    @PluginMethod
-    public void getAppProbeResult(PluginCall call) {
-        String requestedPackage = call.getString("packageName", "");
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String target = prefs.getString(PROBE_TARGET, "");
-        String state = prefs.getString(PROBE_STATE, "idle");
-
-        JSObject ret = new JSObject();
-        ret.put("state", state);
-        ret.put("targetPackage", target);
-        ret.put("seenPackage", prefs.getString(PROBE_SEEN, ""));
-        ret.put("timestamp", prefs.getLong(PROBE_TIME, 0));
-
-        if (!requestedPackage.isEmpty() && !requestedPackage.equals(target)) {
-            ret.put("state", "different_probe");
-        } else if ("verified".equals(state) || "timeout".equals(state) || "launch_failed".equals(state)) {
-            prefs.edit().putBoolean(PROBE_ACTIVE, false).apply();
-        }
-
-        call.resolve(ret);
-    }
-
     @PluginMethod
     public void getBattery(PluginCall call) {
         BatteryManager bm=(BatteryManager)getContext().getSystemService(Context.BATTERY_SERVICE);
         int level=bm!=null?bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY):-1;
         JSObject r=new JSObject();r.put("level",level);call.resolve(r);
+    }
+
+
+    @PluginMethod
+    public void getPowerState(PluginCall call) {
+        BatteryManager bm=(BatteryManager)getContext().getSystemService(Context.BATTERY_SERVICE);
+        int level=bm!=null?bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY):-1;
+        Intent battery=getContext().registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        int status=battery!=null?battery.getIntExtra(BatteryManager.EXTRA_STATUS,-1):-1;
+        int plugged=battery!=null?battery.getIntExtra(BatteryManager.EXTRA_PLUGGED,0):0;
+        boolean charging=status==BatteryManager.BATTERY_STATUS_CHARGING||status==BatteryManager.BATTERY_STATUS_FULL;
+        String pluggedName="";
+        if(plugged==BatteryManager.BATTERY_PLUGGED_USB)pluggedName="USB";
+        else if(plugged==BatteryManager.BATTERY_PLUGGED_AC)pluggedName="carregador";
+        else if(plugged==BatteryManager.BATTERY_PLUGGED_WIRELESS)pluggedName="sem fio";
+        PowerManager pm=(PowerManager)getContext().getSystemService(Context.POWER_SERVICE);
+        JSObject r=new JSObject();
+        r.put("level",level);
+        r.put("charging",charging);
+        r.put("plugged",pluggedName);
+        r.put("powerSaveMode",pm!=null&&pm.isPowerSaveMode());
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void openPowerSettings(PluginCall call) {
+        String action=call.getString("action","");
+        Intent i;
+        if("saver".equals(action))i=new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS);
+        else if("battery-usage".equals(action)||"usage".equals(action))i=new Intent(Settings.ACTION_BATTERY_USAGE_SETTINGS);
+        else if("battery-optimization".equals(action))i=new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+        else if("usage-access".equals(action))i=new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+        else if("display".equals(action))i=new Intent(Settings.ACTION_DISPLAY_SETTINGS);
+        else if("wireless".equals(action))i=new Intent(Settings.ACTION_WIRELESS_SETTINGS);
+        else if("bluetooth".equals(action))i=new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
+        else if("location".equals(action))i=new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+        else {JSObject r=new JSObject();r.put("opened",false);call.resolve(r);return;}
+        try{i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);getContext().startActivity(i);JSObject r=new JSObject();r.put("opened",true);call.resolve(r);}
+        catch(Exception e){JSObject r=new JSObject();r.put("opened",false);call.resolve(r);}
+    }
+
+    @PluginMethod
+    public void openAppPowerSettings(PluginCall call) {
+        String packageName=call.getString("packageName","").trim();
+        if(packageName.isEmpty()){JSObject r=new JSObject();r.put("opened",false);call.resolve(r);return;}
+        try{
+            Intent i=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+packageName));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            JSObject r=new JSObject();r.put("opened",true);call.resolve(r);
+        }catch(Exception e){JSObject r=new JSObject();r.put("opened",false);call.resolve(r);}
+    }
+
+    private boolean usageAccessGranted() {
+        try{
+            AppOpsManager appOps=(AppOpsManager)getContext().getSystemService(Context.APP_OPS_SERVICE);
+            if(appOps==null)return false;
+            int mode=appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getContext().getPackageName());
+            return mode==AppOpsManager.MODE_ALLOWED;
+        }catch(Exception e){return false;}
+    }
+
+    @PluginMethod
+    public void hasUsageAccess(PluginCall call) {
+        JSObject r=new JSObject();r.put("granted",usageAccessGranted());call.resolve(r);
+    }
+
+    @PluginMethod
+    public void getUsageStats(PluginCall call) {
+        JSArray out=new JSArray();
+        if(!usageAccessGranted()){JSObject r=new JSObject();r.put("apps",out);r.put("granted",false);call.resolve(r);return;}
+        Integer h=call.getInt("hours");int hours=h==null?24:Math.max(1,Math.min(168,h));
+        long end=System.currentTimeMillis(),start=end-hours*60L*60L*1000L;
+        try{
+            UsageStatsManager manager=(UsageStatsManager)getContext().getSystemService(Context.USAGE_STATS_SERVICE);
+            List<UsageStats> stats=manager==null?new ArrayList<>():manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY,start,end);
+            if(stats==null)stats=new ArrayList<>();
+            Collections.sort(stats,(a,b)->Long.compare(b.getTotalTimeInForeground(),a.getTotalTimeInForeground()));
+            int count=0;
+            for(UsageStats s:stats){
+                if(s==null||s.getTotalTimeInForeground()<=0)continue;
+                JSObject x=new JSObject();x.put("packageName",s.getPackageName());x.put("foregroundMs",s.getTotalTimeInForeground());x.put("lastTimeUsed",s.getLastTimeUsed());out.put(x);
+                if(++count>=50)break;
+            }
+            JSObject r=new JSObject();r.put("apps",out);r.put("granted",true);call.resolve(r);
+        }catch(Exception e){JSObject r=new JSObject();r.put("apps",out);r.put("granted",true);call.resolve(r);}
     }
 
     @PluginMethod

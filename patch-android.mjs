@@ -9,8 +9,6 @@ fs.mkdirSync(javaDir, { recursive: true });
 
 const plugin = fs.readFileSync(path.join(root, 'CentralBridgePlugin.java.txt'), 'utf8');
 fs.writeFileSync(path.join(javaDir, 'CentralBridgePlugin.java'), plugin);
-const accessibilityService = fs.readFileSync(path.join(root, 'CentralAccessibilityService.java.txt'), 'utf8');
-fs.writeFileSync(path.join(javaDir, 'CentralAccessibilityService.java'), accessibilityService);
 
 const main = path.join(javaDir, 'MainActivity.java');
 fs.writeFileSync(main, `package br.com.sobrevivencia.central;
@@ -33,28 +31,21 @@ public class MainActivity extends BridgeActivity {
 `);
 
 const manifest = path.join(root, 'android/app/src/main/AndroidManifest.xml');
-const accessibilityXmlDir = path.join(root, 'android/app/src/main/res/xml');
-fs.mkdirSync(accessibilityXmlDir, { recursive: true });
-const accessibilityXml = `<?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
-    android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="100"
-    android:canRetrieveWindowContent="false"
-    android:accessibilityFlags="flagDefault"
-    android:isAccessibilityTool="false" />`;
-fs.writeFileSync(path.join(accessibilityXmlDir, 'central_accessibility_service.xml'), accessibilityXml);
-
 const launcherDir = path.join(root, 'android/app/src/main/res/drawable-nodpi');
 fs.mkdirSync(launcherDir, { recursive: true });
 fs.copyFileSync(path.join(root, 'icone.png'), path.join(launcherDir, 'launchericon.png'));
 
 let xml = fs.readFileSync(manifest, 'utf8');
-const locationPermissions = `<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />`;
+const requiredPermissions = [
+  'android.permission.ACCESS_COARSE_LOCATION',
+  'android.permission.ACCESS_FINE_LOCATION',
+  'android.permission.PACKAGE_USAGE_STATS'
+];
 
-if (!xml.includes('android.permission.ACCESS_COARSE_LOCATION')) {
-  xml = xml.replace(/<manifest([^>]*)>/, `<manifest$1>\n${locationPermissions}`);
+for (const permission of requiredPermissions) {
+  if (!xml.includes(permission)) {
+    xml = xml.replace(/<manifest([^>]*)>/, `<manifest$1>\n<uses-permission android:name="${permission}" />`);
+  }
 }
 
 const queries = `<queries>
@@ -79,34 +70,14 @@ xml = xml
   .replace(/\sandroid:roundIcon="[^"]*"/g, '')
   .replace(/<application\b([^>]*)>/, '<application$1 android:icon="@drawable/launchericon" android:roundIcon="@drawable/launchericon">');
 
-
-const accessibilityServiceDeclaration = `
-        <service
-            android:name=".CentralAccessibilityService"
-            android:label="Diagnóstico da Sobrevivência Central"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/central_accessibility_service" />
-        </service>`;
-
-if (!xml.includes('android:name=".CentralAccessibilityService"')) {
-  xml = xml.replace('</application>', `${accessibilityServiceDeclaration}
-    </application>`);
-}
-
 fs.writeFileSync(manifest, xml);
 
 const gradle = path.join(root, 'android/app/build.gradle');
 if (fs.existsSync(gradle)) {
   let g = fs.readFileSync(gradle, 'utf8');
   g = g
-    .replace(/versionCode\s+\d+/, 'versionCode 40100')
-    .replace(/versionName\s+"[^"]+"/, 'versionName "4.1.0"');
+    .replace(/versionCode\s+\d+/, 'versionCode 42000')
+    .replace(/versionName\s+"[^"]+"/, 'versionName "4.2.0"');
 
   const ks = process.env.ANDROID_KEYSTORE_PATH;
   const storePass = process.env.ANDROID_KEYSTORE_PASSWORD;
