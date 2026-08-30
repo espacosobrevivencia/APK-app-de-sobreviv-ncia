@@ -36,6 +36,13 @@ fs.mkdirSync(launcherDir, { recursive: true });
 fs.copyFileSync(path.join(root, 'icone.png'), path.join(launcherDir, 'launchericon.png'));
 
 let xml = fs.readFileSync(manifest, 'utf8');
+const locationPermissions = `<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />`;
+
+if (!xml.includes('android.permission.ACCESS_COARSE_LOCATION')) {
+  xml = xml.replace(/<manifest([^>]*)>/, `<manifest$1>\n${locationPermissions}`);
+}
+
 const queries = `<queries>
   <package android:name="com.mapswithme.maps.pro" />
   <package android:name="com.trailbehind.android.gaiagps.pro" />
@@ -64,8 +71,8 @@ const gradle = path.join(root, 'android/app/build.gradle');
 if (fs.existsSync(gradle)) {
   let g = fs.readFileSync(gradle, 'utf8');
   g = g
-    .replace(/versionCode\s+\d+/, 'versionCode 40001')
-    .replace(/versionName\s+"[^"]+"/, 'versionName "4.0.1"');
+    .replace(/versionCode\s+\d+/, 'versionCode 40002')
+    .replace(/versionName\s+"[^"]+"/, 'versionName "4.0.2"');
 
   const ks = process.env.ANDROID_KEYSTORE_PATH;
   const storePass = process.env.ANDROID_KEYSTORE_PASSWORD;

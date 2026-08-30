@@ -1,5 +1,6 @@
 package br.com.sobrevivencia.central;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -13,21 +14,68 @@ import androidx.activity.result.ActivityResult;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
 
-@CapacitorPlugin(name = "CentralBridge")
+@CapacitorPlugin(
+    name = "CentralBridge",
+    permissions = {
+        @Permission(alias = "location", strings = { Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION }),
+        @Permission(alias = "coarseLocation", strings = { Manifest.permission.ACCESS_COARSE_LOCATION })
+    }
+)
 public class CentralBridgePlugin extends Plugin {
     private static final String PREFS = "central_native";
     private static final String FOLDERS = "folders";
+
+    private JSObject locationPermissionResult() {
+        PermissionState precise = getPermissionState("location");
+        PermissionState coarse = getPermissionState("coarseLocation");
+        String preciseText = precise == null ? "prompt" : precise.toString();
+        String coarseText = coarse == null ? "prompt" : coarse.toString();
+        String state;
+        if (precise == PermissionState.GRANTED) state = "granted";
+        else if (coarse == PermissionState.GRANTED) state = "approximate";
+        else if (precise != null) state = precise.toString();
+        else state = "prompt";
+        JSObject ret = new JSObject();
+        ret.put("state", state);
+        ret.put("precise", preciseText);
+        ret.put("coarse", coarseText);
+        return ret;
+    }
+
+    @PluginMethod
+    public void checkLocationPermission(PluginCall call) {
+        call.resolve(locationPermissionResult());
+    }
+
+    @PluginMethod
+    public void requestLocationPermission(PluginCall call) {
+        PermissionState precise = getPermissionState("location");
+        PermissionState coarse = getPermissionState("coarseLocation");
+        if (precise == PermissionState.GRANTED || coarse == PermissionState.GRANTED) {
+            call.resolve(locationPermissionResult());
+            return;
+        }
+        requestPermissionForAlias("location", call, "locationPermissionCallback");
+    }
+
+    @PermissionCallback
+    private void locationPermissionCallback(PluginCall call) {
+        call.resolve(locationPermissionResult());
+    }
 
     @PluginMethod
     public void ping(PluginCall call) {
