@@ -13,7 +13,6 @@ on:
       - 'prepare-web.mjs'
       - 'native-entry.js'
       - 'CentralBridgePlugin.java.txt'
-      - 'CentralAccessibilityService.java.txt'
       - 'patch-android.mjs'
       - '.github/workflows/build-apk.yml'
 
@@ -84,11 +83,11 @@ jobs:
             find android/app/build/outputs -maxdepth 5 -type f || true
             exit 1
           fi
-          cp "$APK_PATH" dist/Sobrevivencia-Central-V4.1.0.apk
+          cp "$APK_PATH" dist/Sobrevivencia-Central-V4.2.0.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sobrevivencia-Central-V4.1.0
-          path: dist/Sobrevivencia-Central-V4.1.0.apk
+          name: Sobrevivencia-Central-V4.2.0
+          path: dist/Sobrevivencia-Central-V4.2.0.apk
           if-no-files-found: error
