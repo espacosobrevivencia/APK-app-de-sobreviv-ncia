@@ -13,6 +13,7 @@ on:
       - 'prepare-web.mjs'
       - 'native-entry.js'
       - 'CentralBridgePlugin.java.txt'
+      - 'CentralAccessibilityService.java.txt'
       - 'patch-android.mjs'
       - '.github/workflows/build-apk.yml'
 
@@ -40,6 +41,13 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+
+      - name: Check signing secrets
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 não está configurado."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm install
@@ -70,11 +78,17 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk dist/Sobrevivencia-Central-V4.0.2.apk
+          APK_PATH="$(find android/app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::APK de release não encontrado."
+            find android/app/build/outputs -maxdepth 5 -type f || true
+            exit 1
+          fi
+          cp "$APK_PATH" dist/Sobrevivencia-Central-V4.1.0.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sobrevivencia-Central-V4.0.2
-          path: dist/Sobrevivencia-Central-V4.0.2.apk
+          name: Sobrevivencia-Central-V4.1.0
+          path: dist/Sobrevivencia-Central-V4.1.0.apk
           if-no-files-found: error
