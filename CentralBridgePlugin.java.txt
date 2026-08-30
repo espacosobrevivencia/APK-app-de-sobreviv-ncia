@@ -170,7 +170,7 @@ public class CentralBridgePlugin extends Plugin {
         String action=call.getString("action","");
         Intent i;
         if("saver".equals(action))i=new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS);
-        else if("battery-usage".equals(action)||"usage".equals(action))i=new Intent(Settings.ACTION_BATTERY_USAGE_SETTINGS);
+        else if("battery-usage".equals(action)||"usage".equals(action))i=new Intent(Intent.ACTION_POWER_USAGE_SUMMARY);
         else if("battery-optimization".equals(action))i=new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
         else if("usage-access".equals(action))i=new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
         else if("display".equals(action))i=new Intent(Settings.ACTION_DISPLAY_SETTINGS);
