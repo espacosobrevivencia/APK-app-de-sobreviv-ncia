@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { build } from 'esbuild';
+const root=process.cwd(),www=path.join(root,'www');
+fs.rmSync(www,{recursive:true,force:true});fs.mkdirSync(www,{recursive:true});
+for(const name of ['manifest.json','icone.png'])fs.copyFileSync(path.join(root,name),path.join(www,name));
+let html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+html=html.replace(/<script>\s*\n(?=const APP_VERSION)/,'<script src="./native-bridge.js"></script>\n<script>\n');
+fs.writeFileSync(path.join(www,'index.html'),html);
+await build({entryPoints:[path.join(root,'native-entry.js')],bundle:true,format:'iife',platform:'browser',target:['chrome100'],outfile:path.join(www,'native-bridge.js'),minify:true});
+console.log('www preparado');

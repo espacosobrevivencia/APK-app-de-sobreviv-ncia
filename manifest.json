@@ -1,0 +1,60 @@
+{
+  "id": "./",
+  "name": "Sobrevivência Central",
+  "short_name": "Sobrevivência",
+  "description": "Central offline do segundo espaço para emergência, navegação, comunicação, conhecimento e preparo.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "./icone.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Modo Emergência",
+      "short_name": "SOS",
+      "url": "./?view=modo-emergencia",
+      "icons": [
+        {
+          "src": "./icone.png",
+          "sizes": "512x512",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Minha posição",
+      "short_name": "Posição",
+      "url": "./?view=navegacao",
+      "icons": [
+        {
+          "src": "./icone.png",
+          "sizes": "512x512",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Checklist",
+      "short_name": "Checklist",
+      "url": "./?view=checklist",
+      "icons": [
+        {
+          "src": "./icone.png",
+          "sizes": "512x512",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

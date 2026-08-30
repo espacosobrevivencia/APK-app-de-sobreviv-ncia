@@ -1,0 +1,12 @@
+{
+  "appId": "br.com.sobrevivencia.central",
+  "appName": "Sobrevivência Central",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#000000",
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "sobrevivencia-central",
+  "version": "4.0.0",
+  "private": true,
+  "description": "Central offline Android para emergência e sobrevivência",
+  "scripts": {
+    "prepare:web": "node prepare-web.mjs",
+    "android:add": "npm run prepare:web && npx cap add android",
+    "android:sync": "npm run prepare:web && npx cap sync android",
+    "android:patch": "node patch-android.mjs",
+    "build:android": "npm run prepare:web && npx cap sync android && node patch-android.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.0",
+    "@capacitor/android": "8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.0",
+    "esbuild": "0.25.9"
+  }
+}
